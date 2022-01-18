@@ -25,7 +25,7 @@ public class Streaming {
     public static  void main(String args[]){
 
         DataflowPipelineOptions dataflowPipelineOptions= PipelineOptionsFactory.as(DataflowPipelineOptions.class);
-        dataflowPipelineOptions.setJobName("StreamingIngestion");
+        dataflowPipelineOptions.setJobName("usecase1-labid-15");
         dataflowPipelineOptions.setProject("nttdata-c4e-bde");
         dataflowPipelineOptions.setRegion("europe-west4");
         dataflowPipelineOptions.setGcpTempLocation("gs://c4e-uc1-dataflow-temp-15/temp");
