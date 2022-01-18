@@ -5,18 +5,25 @@ import org.apache.beam.sdk.Pipeline;
 import org.apache.beam.sdk.io.gcp.bigquery.BigQueryIO;
 import org.apache.beam.sdk.io.gcp.pubsub.PubsubIO;
 import org.apache.beam.sdk.options.PipelineOptionsFactory;
+import org.apache.beam.sdk.schemas.Schema;
 import org.apache.beam.sdk.transforms.DoFn;
+import org.apache.beam.sdk.transforms.JsonToRow;
 import org.apache.beam.sdk.transforms.ParDo;
-import org.apache.beam.sdk.values.PCollection;
-import org.apache.beam.sdk.values.PCollectionTuple;
-import org.apache.beam.sdk.values.TupleTag;
-import org.apache.beam.sdk.values.TupleTagList;
+import org.apache.beam.sdk.values.*;
 
 public class Streaming {
+   static final TupleTag<String> VALID_ROWS=new TupleTag<>(){};
+   static final TupleTag<String> INVALID_ROWS=new TupleTag<>(){};
+
+    //required for building schema before passing data to table
+    public static final Schema FinalSchema = Schema.builder()
+            .addInt64Field("id")
+            .addStringField("name")
+            .addStringField("surname")
+            .build();
 
     public static  void main(String args[]){
-         TupleTag<String> VALID_ROWS=new TupleTag<>(){};
-        TupleTag<String> INVALID_ROWS=new TupleTag<>(){};
+
         DataflowPipelineOptions dataflowPipelineOptions= PipelineOptionsFactory.as(DataflowPipelineOptions.class);
         dataflowPipelineOptions.setJobName("StreamingIngestion");
         dataflowPipelineOptions.setProject("nttdata-c4e-bde");
@@ -33,11 +40,18 @@ public class Streaming {
         //PCollection<String> pubsubmessage=pipeline.apply(PubsubIO.readStrings().fromTopic("projects/nttdata-c4e-bde/topics/uc1-input-topic-15"));
 
 
-        PCollectionTuple rowcheck=pubsubmessage.apply(ParDo.of(new RowChecker()).withOutputTags(VALID_ROWS, TupleTagList.of(INVALID_ROWS)));
-        PCollection<TableRow> bqrow=rowcheck.get(VALID_ROWS).apply(ParDo.of(new ConvertorStringBq()));
-        bqrow.apply(BigQueryIO.writeTableRows().to("nttdata-c4e-bde.uc1_15.account")
-                .withCreateDisposition(BigQueryIO.Write.CreateDisposition.CREATE_NEVER)
+        PCollectionTuple rowcheck=pubsubmessage.apply("ParseJson",ParDo.of(new RowChecker()).withOutputTags(VALID_ROWS, TupleTagList.of(INVALID_ROWS)));
+
+
+        PCollection<String>  validData=rowcheck.get(VALID_ROWS);
+        validData.apply("TransformToRow", JsonToRow.withSchema(FinalSchema))
+                .apply("WriteDataToTable", BigQueryIO.<Row>write().to("nttdata-c4e-bde.uc1_15.account").useBeamSchema()
                         .withWriteDisposition(BigQueryIO.Write.WriteDisposition.WRITE_APPEND));
+
+//        PCollection<TableRow> bqrow=rowcheck.get(VALID_ROWS).apply(ParDo.of(new ConvertorStringBq()));
+//        bqrow.apply(BigQueryIO.writeTableRows().to("nttdata-c4e-bde.uc1_15.account")
+//                .withCreateDisposition(BigQueryIO.Write.CreateDisposition.CREATE_NEVER)
+//                        .withWriteDisposition(BigQueryIO.Write.WriteDisposition.WRITE_APPEND));
 
         PCollection<String> invalidData=rowcheck.get(INVALID_ROWS);
         //write Invalid data(malformed data) to Big query.
@@ -61,22 +75,21 @@ public class Streaming {
 
     private static class RowChecker extends DoFn<String,String>{
 
-        private static TupleTag<String> VALID_ROWS=new TupleTag<>(){};
-        private static TupleTag<String> INVALID_ROWS=new TupleTag<>(){};
+
         @ProcessElement
-        public void check(ProcessContext processContext){
-            String[] arrJson=processContext.element().split(",");
+        public void check(@Element String json,ProcessContext processContext) throws Exception{
+            String[] arrJson=json.split(",");
             if(arrJson.length==3) {
                 //validatios
                 if(arrJson[0].contains("id") && arrJson[1].contains("name") &&arrJson[2].contains("surname")){
-                    processContext.output(VALID_ROWS,processContext.element());
+                    processContext.output(VALID_ROWS,json);
                 }else{
                     //Malformed data
-                    processContext.output(INVALID_ROWS,processContext.element());
+                    processContext.output(INVALID_ROWS,json);
                 }
             }else{
                 //Malformed data
-                processContext.output(INVALID_ROWS,processContext.element());
+                processContext.output(INVALID_ROWS,json);
             }
 
         }
